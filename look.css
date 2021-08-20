@@ -1,0 +1,84 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  font-family: monospace;
+}
+
+.loading {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: black;
+  background: white;
+}
+
+.dbg {
+  white-space: break-spaces;
+}
+
+.hide-on-blur {
+  opacity: 0;
+}
+
+.hide-on-blur:hover {
+  opacity: 1;
+}
+
+.control-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  overflow: auto;
+  color: white;
+  padding: 8px;
+  background: #222;
+}
+
+.control-panel .ui-item {
+  margin: 0 0 8px 0;
+}
+
+.control-panel .section {
+  margin: 0 0 8px 0;
+  border-bottom: 1px solid white;
+  padding: 0 0 8px 8px;
+}
+
+.control-panel .ui-item input {
+  float: right;
+}
+
+.control-panel .ui-item .caption {
+  margin: 0 8px 0 0;
+}
+
+.control-panel .ui-item .button {
+  cursor: pointer;
+  display: inline-block;
+}
+
+.control-panel .ui-item .button:hover {
+  font-weight: bold;
+}
+
+.control-panel .ui-item .narrow-32 {
+  width: 32px;
+}
+
+.control-panel .ui-item .narrow-48 {
+  width: 48px;
+}
+
+.control-panel .ui-item .narrow-64 {
+  width: 64px;
+}
