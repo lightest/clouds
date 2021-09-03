@@ -122,18 +122,18 @@ float getHeightSignal (vec3 samplePos) {
 ParticipatingMedia getParticipatingMedia(const vec3 samplePos, const bool sampleCloudNoise) {
   vec3 sigmaScattering;
   vec3 sigmaExtinction;
-  float weatherData = texture(uWeatherTex, (uT * uWindMagnitude * .005 + samplePos.xz) * uWeatherTexScale).x;
+  float weatherData = textureLod(uWeatherTex, (uT * uWindMagnitude * .005 + samplePos.xz) * uWeatherTexScale, 0.).x;
   // float weatherData = generateWeatherMap((samplePos.xz + uT * .00025) * uWeatherTexScale);
   float density;
   float cloudSample;
   float coverageSignal = weatherData * getHeightSignal(samplePos);
   if (coverageSignal >= uErosionThreshold) {
     if (sampleCloudNoise) {
-      // texture(uErosionTex, pos * uErosionTexScale);
-      density = coverageSignal * texture(uCloudTex, samplePos * uCloudTexScale).x;
+      // textureLod(uErosionTex, pos * uErosionTexScale, 0.);
+      density = coverageSignal * textureLod(uCloudTex, samplePos * uCloudTexScale, 0.).x;
       density *= step(uErosionThreshold, density);
       // if (density < uErosionThreshold) {
-      //   density -= texture(uErosionTex, pos * uErosionTexScale).x;
+      //   density -= textureLod(uErosionTex, pos * uErosionTexScale, 0.).x;
       // }
     } else {
       density = coverageSignal;

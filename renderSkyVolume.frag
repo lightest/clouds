@@ -167,7 +167,7 @@ vec4 getSkyOpticalDepthToSun (vec3 worldPos, vec3 dirToLight) {
   float sunZenithCosAngle = dot(dirToLight, upVector);
   vec2 uv;
   LutTransmittanceParamsToUv(sampleAltitude, sunZenithCosAngle, uv);
-  return texture(uSkyOpticalDepthToSun, uv);
+  return textureLod(uSkyOpticalDepthToSun, uv, 0.);
 }
 
 vec3 approximateSkyMultipleScattering (vec3 lightVal, vec3 rayleighScattering, vec3 mieScattering, float cosTheta, vec3 opticalDepthToSun, int octaves) {
