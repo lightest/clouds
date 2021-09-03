@@ -338,17 +338,17 @@ float getHeightSignal (vec3 samplePos) {
 ParticipatingMedia getParticipatingMedia(const vec3 samplePos, const bool sampleCloudNoise) {
   vec3 sigmaScattering;
   vec3 sigmaExtinction;
-  float weatherData = texture(uWeatherTex, (uT * uWindMagnitude * .005 + samplePos.xz) * uWeatherTexScale).x;
+  float weatherData = textureLod(uWeatherTex, (uT * uWindMagnitude * .005 + samplePos.xz) * uWeatherTexScale, 0.).x;
   float density;
   float cloudSample;
   float coverageSignal = weatherData * getHeightSignal(samplePos);
   if (coverageSignal >= uErosionThreshold) {
     if (sampleCloudNoise) {
-      // texture(uErosionTex, pos * uErosionTexScale);
-      density = coverageSignal * texture(uCloudTex, samplePos * uCloudTexScale).x;
+      // textureLod(uErosionTex, pos * uErosionTexScale, 0.);
+      density = coverageSignal * textureLod(uCloudTex, samplePos * uCloudTexScale, 0.).x;
       density *= step(uErosionThreshold, density);
       // if (density < uErosionThreshold) {
-      //   density -= texture(uErosionTex, pos * uErosionTexScale).x;
+      //   density -= textureLod(uErosionTex, pos * uErosionTexScale, 0.).x;
       // }
     } else {
       density = coverageSignal;
@@ -366,7 +366,7 @@ vec4 getSkyOpticalDepthToSun (vec3 worldPos, vec3 dirToLight) {
   float sunZenithCosAngle = dot(dirToLight, upVector);
   vec2 uv;
   LutTransmittanceParamsToUv(sampleAltitude, sunZenithCosAngle, uv);
-  return texture(uSkyShadowMapTex, uv);
+  return textureLod(uSkyShadowMapTex, uv, 0.);
 }
 
 vec3 getOpticalDepthToSun(vec3 from, vec3 dirToLight, const float f, const bool sampleCloudNoise) {
@@ -454,7 +454,7 @@ vec4 mixWithReprojectedPixel (vec4 currentPixel, vec3 worldPos, vec3 farthestPos
   uv = prevPos.xy * .5 + .5;
 
   if (uv.x >= 0. && uv.x <= 1. && uv.y >= 0. && uv.y <= 1.) {
-    bufferedPixel = texture(pixelBuf, uv);
+    bufferedPixel = textureLod(pixelBuf, uv, 0.);
     // color = vec4(uv, 0., 1.);
     if (worldPos != farthestPos) {
       temporalAlpha = uTemporalAlpha;
@@ -503,14 +503,14 @@ vec4 getCloudShadowMapData (vec3 worldPos) {
   uv = pos.xy * .5 + .5;
 
   if (uv.x >= 0. && uv.x <= 1. && uv.y >= 0. && uv.y <= 1.) {
-    shadowMapData = texture(uLocalCloudShadowMapTex, uv);
+    shadowMapData = textureLod(uLocalCloudShadowMapTex, uv, 0.);
     // color = vec4(uv, 0., 1.);
   } else {
     pos = uGlobalShadowMapProjViewMatInv * vec4(worldPos, 1.);
     pos /= pos.w;
     uv = pos.xy * .5 + .5;
     if (uv.x >= 0. && uv.x <= 1. && uv.y >= 0. && uv.y <= 1.) {
-      shadowMapData = texture(uCloudShadowMapTex, uv);
+      shadowMapData = textureLod(uCloudShadowMapTex, uv, 0.);
     }
   }
   return shadowMapData;
@@ -523,8 +523,8 @@ void applySkyToClouds (vec3 marchOrigin, vec3 rayDir, float marchDist, inout Clo
 
   if (primaryCloudLayer.transmittance != vec3(1.)) {
     z = length(marchOrigin - primaryCloudLayer.nearSample) / marchDist;
-    nearSkyScattering = texture(uSkyScatteringVol, vec3(vTexCoord, z)).xyz;
-    nearSkyTransmittance = texture(uSkyTransmittanceVol, vec3(vTexCoord, z)).xyz;
+    nearSkyScattering = textureLod(uSkyScatteringVol, vec3(vTexCoord, z), 0.).xyz;
+    nearSkyTransmittance = textureLod(uSkyTransmittanceVol, vec3(vTexCoord, z), 0.).xyz;
     primaryCloudLayer.scatteredLight = primaryCloudLayer.scatteredLight * nearSkyTransmittance + nearSkyScattering * primaryCloudCrepRaysTerm;
     primaryCloudLayer.transmittance *= nearSkyTransmittance;
   }
