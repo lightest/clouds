@@ -6,3 +6,9 @@ https://www.youtube.com/watch?v=Unyff4dbbeQ
 https://nikita.works/testchambers/clouds/
 
 ![Clouds preview](https://agafnik.com/img/clouds.webp)
+
+## Controls
+`WASD` - movement <br/>
+`Q` - roll left <br/>
+`E` - roll right <br/>
+`MOUSE WHEEL` - increase or decrease movement speed
