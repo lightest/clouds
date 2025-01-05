@@ -11,4 +11,6 @@ https://nikita.works/testchambers/clouds/
 `WASD` - movement <br/>
 `Q` - roll left <br/>
 `E` - roll right <br/>
+`R` - ascend <br/>
+`F` - descent <br/>
 `MOUSE WHEEL` - increase or decrease movement speed
