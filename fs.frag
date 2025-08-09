@@ -47,7 +47,7 @@ void main () {
   if (uDoRenderUVs) {
     color = vec4(vTexCoord.x, vTexCoord.y, 0., 1.);
   } else if (uRender3DTex) {
-    color = texture(uTex3D, vec3(vTexCoord.xy, 1.));
+    color = vec4(texture(uTex3D, vec3(vTexCoord.xy, .5)).xyz, 1.);
   } else {
     vec4 c = texture(uTex, vTexCoord);
     // c.xyz = pow(c.xyz, vec3(1.0/2.2));

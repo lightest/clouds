@@ -1,6 +1,7 @@
 'use strict';
 
 import ShaderProgram from './ShaderProgram.js';
+import FluidSim from './fluid/2d/FluidSim.js';
 
 var mainModule = (function () {
 
@@ -15,7 +16,8 @@ var mainModule = (function () {
   const DEFAULT_RES = 256;
   const TRANSLATION_SPEED = .025;
   let translationIncrease = 1.;
-  const ROTATION_SPEED = .007;
+  const ROTATION_SPEED = .001;
+  const WEATHER_DRAWING_BOARD_SIZE = new Float32Array([300, 300]);
   const WEATHER_MAP_SIZE = new Float32Array([256, 256]);
   const CLOUD_SHADOW_MAP_SIZE = new Float32Array([512, 512]);
   const CLOUD_SHADOW_MAP_VOLUME_SIZE = new Float32Array([32, 32, 32]);
@@ -23,9 +25,9 @@ var mainModule = (function () {
   const SKY_VOLUME_SIZE = new Float32Array([32, 32, 32]);
   const SKY_OPTICAL_DEPTH_LUT_SIZE = new Float32Array([256, 64]);
   const SKY_VIEW_LUT_SIZE = new Float32Array([256, 144]);
+  const MULTI_SCATT_LUT_SIZE = new Float32Array([32, 32]);
   let PRESSED_KEYS = [];
-  let MOUSE_MOVEMENTS = new Float32Array(96);
-  let LAST_MOUSE_MOVEMENT_IDX = 0;
+  let MOUSE_MOVEMENTS = new Float32Array(2);
   let KEYS = {
     F5: 116,
     F12: 123,
@@ -69,8 +71,8 @@ var mainModule = (function () {
     _cloudTopDensityEnd: 1.,
     _RSun: 123 * 1.,
     _cloudDensityMul: 14.,
-    _skyScatteringMul: 1.6,
-    _skyAbsorptionMul: 1.6,
+    _skyScatteringMul: 1,
+    _skyAbsorptionMul: 1,
     _mieScattering: new Float32Array([.003996, .003996, .003996]),
     _mieAbsorbtion: new Float32Array([.000444, .000444, .000444]),
     _rayleighScattering: new Float32Array([.005802, .013558, .033100]),
@@ -78,7 +80,7 @@ var mainModule = (function () {
     _mieScatteringScale: 1.2,
     _cloudScattering: new Float32Array([1., 1., 1.]),
     _lightPos: new Float32Array([0., 123 * 100., 123 * 100.]),
-    _lightMagnitude: 10,
+    _lightMagnitude: 2.8,
     _lightColor: new Float32Array([1., 1., 1.]),
     _cloudPhaseG0: -.2,
     _cloudPhaseG1: .9,
@@ -95,7 +97,8 @@ var mainModule = (function () {
     _erosionTexScale: 1.,
     _erosionThreshold: .31,
     _temporalAlpha: .1,
-    _mouseSensivity: .002
+    _mouseSensivity: .002,
+    _gamma: 2.2
   };
 
   let DEFAULT_CFG2 = {
@@ -135,7 +138,18 @@ var mainModule = (function () {
       this._gl = undefined;
       this._dt = 0;
 
-      this._showDbgInfo = false;
+      this._useFluidSimForWeather = false;
+      this._use2dFluidSim = false;
+      this._fluidSimInkSplatSize = .0003;
+      this._fluidSimForceSplatSize = .0003;
+      this._fluidSimForceMag = 3.2;
+      this._fluidSimInkFadeFactor = .999;
+      this._fluidSimTimeScale = 1.;
+      this._fluidSimVorticityMul = 11.3;
+      this._fluidSimDiffusionIterations = 11;
+      this._fluidSimPressureIterations = 22;
+
+      this._showDbgInfo = true;
       this._hideUIOnBlur = false;
       this._bilateralBlurSigma = 3.5;
       this._bilateralBlurBSigma = 2.0;
@@ -162,9 +176,9 @@ var mainModule = (function () {
       this._cloudTopDensityStart = .25;
       this._cloudTopDensityEnd = 1.;
       this._RSun = this._RPlanet * 1.;
-      this._cloudDensityMul = 14.;
-      this._skyScatteringMul = 1.6;
-      this._skyAbsorptionMul = 1.6;
+      this._cloudDensityMul = 8.;
+      this._skyScatteringMul = 1.1;
+      this._skyAbsorptionMul = 1;
       this._mieScattering = new Float32Array([.003996, .003996, .003996]);
       this._mieAbsorbtion = new Float32Array([.000444, .000444, .000444]);
       this._rayleighScattering = new Float32Array([.005802, .013558, .033100]);
@@ -175,7 +189,7 @@ var mainModule = (function () {
       this._mieAbsorbtionMagnitude = vec3.len(this._mieAbsorbtion);
       this._cloudScattering = new Float32Array([1., 1., 1.]);
       this._lightPos = new Float32Array([0., this._RPlanet * 100., this._RPlanet * 100.]);
-      this._lightMagnitude = 10;
+      this._lightMagnitude = 6.2;
       this._lightColor = new Float32Array([1., 1., 1.]);
       this._cloudPhaseG0 = -.2;
       this._cloudPhaseG1 = .9;
@@ -200,6 +214,9 @@ var mainModule = (function () {
       this._drawMode = undefined;
       this._windowSize = new Float32Array([0, 0]);
       this._mouse = new Float32Array([0, 0]);
+      this._gamma = 2.2;
+
+      this._fluidSim = new FluidSim();
 
       this._bufferVertices = undefined;
       this._bufferIndices = undefined;
@@ -223,17 +240,20 @@ var mainModule = (function () {
         this._setupDenoiseProgram,
         this._setupRenderAtmosphereProgram,
         this._setupRenderSkyVolumeProgram,
-        this._setupRenderSkyShadowMapProgram,
+        this._setupRenderSkyOpticalDepthProgram,
         this._setupRenderCloudShadowMapsProgram,
         this._setupRenderCloudShadowMapVolumeProgram,
         this._setupRenderSkyViewLUTProgram,
-        this._setupRenderWeatherMapProgram
+        this._setupRenderWeatherMapProgram,
+        this._setupRenderVolumeProgram
       ]);
     }
 
     init () {
-      this._cnv = document.querySelector('canvas');
-      this._gl = this._cnv.getContext('webgl2');
+      this._cnv = document.querySelector('canvas#main');
+      this._gl = this._cnv.getContext('webgl2', {
+        powerPreference: 'high-performance'
+      });
       this._cnv.width = document.documentElement.clientWidth;
       this._cnv.height = document.documentElement.clientHeight;
       this._windowSize[0] = this._cnv.width;
@@ -261,6 +281,26 @@ var mainModule = (function () {
       // this._readMieScatteringData('./miescatt_air.txt').then(scattData => {
       //   this._mieScatteringAirTexture = this._createMieScatteringTexture(scattData);
       // });
+
+      this._programs.renderVolume = new ShaderProgram({
+        vertPath: './renderToTexture.vert',
+        fragPath: './renderVolume.frag',
+        gl: this._gl,
+        setup: this._binded._setupRenderVolumeProgram,
+        attrs: [
+          'aPos',
+          'aTexCoord'
+        ],
+        unifs: [
+          'uT',
+          'uTModded',
+          'uDT',
+          'uWindowSize',
+          'uViewMat',
+          'uMouse',
+          'uVol'
+        ]
+      });
 
       this._programs.finalRender = new ShaderProgram({
         vertPath: './renderToTexture.vert',
@@ -301,7 +341,8 @@ var mainModule = (function () {
           'uTModded',
           'uDT',
           'uWindowSize',
-          'uMouse'
+          'uMouse',
+          'uGamma'
         ]
       });
 
@@ -415,11 +456,11 @@ var mainModule = (function () {
         ]
       });
 
-      this._programs.renderSkyShadowMap = new ShaderProgram({
+      this._programs.renderSkyOpticalDepth = new ShaderProgram({
         vertPath: './renderToTexture.vert',
-        fragPath: './renderSkyShadowMap.frag',
+        fragPath: './renderSkyOpticalDepth.frag',
         gl: this._gl,
-        setup: this._binded._setupRenderSkyShadowMapProgram,
+        setup: this._binded._setupRenderSkyOpticalDepthProgram,
         attrs: [
           'aPos',
           'aTexCoord'
@@ -493,7 +534,9 @@ var mainModule = (function () {
           'uGlobalShadowMapViewMat',
           'uCloudTex',
           'uErosionTex',
-          'uWeatherTex'
+          'uUse2DWeather',
+          'uWeatherTex2D',
+          'uWeatherTex3D'
         ]
       });
 
@@ -616,7 +659,9 @@ var mainModule = (function () {
           'uGlobalShadowMapProjViewMatInv',
           'uCloudTex',
           'uErosionTex',
-          'uWeatherTex',
+          'uUse2DWeather',
+          'uWeatherTex2D',
+          'uWeatherTex3D',
           'uSkyShadowMapTex',
           'uCloudShadowMapTex',
           'uLocalCloudShadowMapTex',
@@ -637,10 +682,23 @@ var mainModule = (function () {
         ]
       });
 
+      let weatherDrawingBoard = document.querySelector('.weather-board');
+      weatherDrawingBoard.style.width = `${WEATHER_DRAWING_BOARD_SIZE[0]}px`;
+      weatherDrawingBoard.style.height = `${WEATHER_DRAWING_BOARD_SIZE[1]}px`;
+
+      let fluidSimInitPromise = this._fluidSim.init({
+        drawingBoard: weatherDrawingBoard,
+        gl: this._gl,
+        inkTexWidth: WEATHER_MAP_SIZE[0],
+        inkTexHeight: WEATHER_MAP_SIZE[1]
+      });
+
       Promise.all([
-        ...Object.values(this._programs).map(program => program.creationPromise)
+        ...Object.values(this._programs).map(program => program.creationPromise),
+        fluidSimInitPromise
       ]).then(programs => {
         this._doAssetsWork(() => {
+          this._handleFluidSimWeatherCheck(this._useFluidSimForWeather);
           document.querySelector('.loading').style.display = 'none';
           this.mainLoop();
         });
@@ -677,12 +735,9 @@ var mainModule = (function () {
       this._mouse[0] = e.clientX;
       this._mouse[1] = this._windowSize[1] - e.clientY;
       if (document.pointerLockElement === this._cnv) {
-        if (LAST_MOUSE_MOVEMENT_IDX >= MOUSE_MOVEMENTS.length - 2) {
-          return;
-        }
-        MOUSE_MOVEMENTS[LAST_MOUSE_MOVEMENT_IDX] = -e.movementX;
-        MOUSE_MOVEMENTS[LAST_MOUSE_MOVEMENT_IDX + 1] = -e.movementY;
-        LAST_MOUSE_MOVEMENT_IDX += 2;
+        MOUSE_MOVEMENTS[0] = -e.movementX;
+        MOUSE_MOVEMENTS[1] = -e.movementY;
+        this._applyMouse();
       }
     }
 
@@ -795,27 +850,23 @@ var mainModule = (function () {
       PRESSED_KEYS[e.which] = 0;
     }
 
-    _processMouse () {
-      let i;
+    _applyMouse () {
       let rotAxis = new Float32Array(3);
       let rotationMagnitude;
       let prevRotationMagnitude = .2;
-      for (i = 0; i < LAST_MOUSE_MOVEMENT_IDX; i += 2) {
-        rotAxis[0] = MOUSE_MOVEMENTS[i + 1];
-        rotAxis[1] = MOUSE_MOVEMENTS[i];
-        rotationMagnitude = this._mouseSensivity * Math.sqrt(Math.pow(MOUSE_MOVEMENTS[i], 2) + Math.pow(MOUSE_MOVEMENTS[i + 1], 2));
-        if (rotationMagnitude/prevRotationMagnitude > 2.5) {
-          rotationMagnitude = prevRotationMagnitude;
-        }
-        prevRotationMagnitude = rotationMagnitude;
-        mat4.rotate(this._viewMat, this._viewMat, rotationMagnitude, rotAxis);
-        MOUSE_MOVEMENTS[i] = 0.;
-        MOUSE_MOVEMENTS[i + 1] = 0.;
+      rotAxis[0] = MOUSE_MOVEMENTS[1];
+      rotAxis[1] = MOUSE_MOVEMENTS[0];
+      rotationMagnitude = this._mouseSensivity * Math.sqrt(Math.pow(MOUSE_MOVEMENTS[0], 2) + Math.pow(MOUSE_MOVEMENTS[1], 2));
+      if (rotationMagnitude / prevRotationMagnitude > 2.5) {
+        rotationMagnitude = prevRotationMagnitude;
       }
-      LAST_MOUSE_MOVEMENT_IDX = 0;
+      prevRotationMagnitude = rotationMagnitude;
+      mat4.rotate(this._viewMat, this._viewMat, rotationMagnitude, rotAxis);
+      MOUSE_MOVEMENTS[0] = 0.;
+      MOUSE_MOVEMENTS[1] = 0.;
     }
 
-    _processKeys () {
+    _processKeys (dt = 16) {
       let rotAxis = new Uint8Array([0, 0, 0]);
       let rotSign = 1;
       let translationAxis = new Float32Array([0, 0, 0]);
@@ -880,7 +931,7 @@ var mainModule = (function () {
       mat4.rotate(
         this._viewMat,
         this._viewMat,
-        Math.PI * ROTATION_SPEED * rotSign,
+        Math.PI * ROTATION_SPEED * dt * rotSign,
         rotAxis
       );
     }
@@ -888,6 +939,7 @@ var mainModule = (function () {
     async _doAssetsWork (cb) {
       this._createResolutionDependentAssets();
       this._createResolutionIndependentAssets();
+      this._weatherTexture = this._fluidSim.getInkTex();
       await this._setupTextureAssets([
         {
           path: './noise_shape_packed64.png',
@@ -927,7 +979,7 @@ var mainModule = (function () {
           internalFormat: this._gl.RGBA8,
           texelFormat: this._gl.RGBA,
           type: this._gl.UNSIGNED_BYTE,
-          fieldName: '_weatherTexture'
+          fieldName: '_weatherTextureStatic'
         },
         {
           path: './milkyway.jpg',
@@ -945,9 +997,6 @@ var mainModule = (function () {
     }
 
     _setCurrentProgram (shaderProgram) {
-      // if (this._currentProgram === shaderProgram) {
-      //   return;
-      // }
       this._currentProgram = shaderProgram;
       this._gl.useProgram(shaderProgram.glProgram);
       shaderProgram.setup(this._gl);
@@ -956,6 +1005,11 @@ var mainModule = (function () {
       this._gl.uniform1f(shaderProgram.unifs.uDT, this._dt * .001);
       this._gl.uniform2fv(shaderProgram.unifs.uMouse, this._mouse);
       this._gl.uniform2fv(shaderProgram.unifs.uWindowSize, this._windowSize);
+      this._gl.bindBuffer(this._gl.ARRAY_BUFFER, this._bufferVerticesBuf);
+      this._gl.vertexAttribPointer(shaderProgram.attrs.aPos, 3, this._gl.FLOAT, false, 0, 0);
+      this._gl.bindBuffer(this._gl.ELEMENT_ARRAY_BUFFER, this._bufferIndicesBuf);
+      this._gl.bindBuffer(this._gl.ARRAY_BUFFER, this._bufferTextureCoordBuf);
+      this._gl.vertexAttribPointer(shaderProgram.attrs.aTexCoord, 2, this._gl.FLOAT, false, 0, 0);
     }
 
     _setupFinalRenderProgram (gl, shaderProgram) {
@@ -965,10 +1019,18 @@ var mainModule = (function () {
       gl.uniform1i(shaderProgram.unifs.uTex3D, 1);
     }
 
+    _setupRenderVolumeProgram (gl, shaderProgram) {
+      gl.enableVertexAttribArray(shaderProgram.attrs.aPos);
+      gl.enableVertexAttribArray(shaderProgram.attrs.aTexCoord);
+      gl.uniformMatrix4fv(shaderProgram.unifs.uViewMat, false, this._viewMat);
+      gl.uniform1i(shaderProgram.unifs.uVol, 0);
+    }
+
     _setupRender2DTexProgram (gl, shaderProgram) {
       gl.enableVertexAttribArray(shaderProgram.attrs.aPos);
       gl.enableVertexAttribArray(shaderProgram.attrs.aTexCoord);
       gl.uniform1i(shaderProgram.unifs.uTex, 0);
+      gl.uniform1f(shaderProgram.unifs.uGamma, this._gamma);
     }
 
     _setupBlurProgram (gl, shaderProgram) {
@@ -1006,7 +1068,7 @@ var mainModule = (function () {
       gl.uniform1f(shaderProgram.unifs.uMiePhaseG, this._miePhaseG);
       gl.uniform1f(shaderProgram.unifs.uRayleighScaleDiv, this._rayleighScatteringScale);
       gl.uniform1f(shaderProgram.unifs.uMieScaleDiv, this._mieScatteringScale);
-      gl.uniform1f(shaderProgram.unifs.uLastLayer, SKY_VOLUME_SIZE[2] - 1.);
+      gl.uniform1f(shaderProgram.unifs.uLastLayer, SKY_VOLUME_SIZE[2] * 2.);
       gl.uniformMatrix4fv(shaderProgram.unifs.uViewMat, false, this._viewMat);
 
       gl.uniform1i(shaderProgram.unifs.uSkyOpticalDepthToSun, 0);
@@ -1043,7 +1105,7 @@ var mainModule = (function () {
       // gl.bindTexture(gl.TEXTURE_2D, this._skyViewLUTSwap);
     }
 
-    _setupRenderSkyShadowMapProgram (gl, shaderProgram) {
+    _setupRenderSkyOpticalDepthProgram (gl, shaderProgram) {
       gl.enableVertexAttribArray(shaderProgram.attrs.aPos);
       gl.enableVertexAttribArray(shaderProgram.attrs.aTexCoord);
 
@@ -1081,6 +1143,8 @@ var mainModule = (function () {
       gl.enableVertexAttribArray(shaderProgram.attrs.aPos);
       gl.enableVertexAttribArray(shaderProgram.attrs.aTexCoord);
 
+      // gl.uniform1f(shaderProgram.unifs.uUse2DWeather, !this._useFluidSimForWeather);
+      gl.uniform1f(shaderProgram.unifs.uUse2DWeather, true);
       gl.uniform1f(shaderProgram.unifs.uWeatherTexScale, this._weatherTexScale);
       gl.uniform1f(shaderProgram.unifs.uWindMagnitude, this._windMagnitude);
       gl.uniform1f(shaderProgram.unifs.uCloudTexScale, this._cloudTexScale);
@@ -1107,14 +1171,23 @@ var mainModule = (function () {
 
       gl.uniform1i(shaderProgram.unifs.uCloudTex, 0);
       gl.uniform1i(shaderProgram.unifs.uErosionTex, 1);
-      gl.uniform1i(shaderProgram.unifs.uWeatherTex, 2);
+      gl.uniform1i(shaderProgram.unifs.uWeatherTex3D, 2);
+      gl.uniform1i(shaderProgram.unifs.uWeatherTex2D, 3);
 
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_3D, this._cloudVolumeTexture);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_3D, this._erosionVolumeTexture);
-      gl.activeTexture(gl.TEXTURE2);
-      gl.bindTexture(gl.TEXTURE_2D, this._weatherTexture);
+      // if (this._use2dFluidSim) {
+      if (this._useFluidSimForWeather) {
+        gl.activeTexture(gl.TEXTURE3);
+        gl.bindTexture(gl.TEXTURE_2D, this._weatherTexture);
+      } else {
+        // gl.activeTexture(gl.TEXTURE2);
+        // gl.bindTexture(gl.TEXTURE_3D, this._weatherTexture);
+        gl.activeTexture(gl.TEXTURE3);
+        gl.bindTexture(gl.TEXTURE_2D, this._weatherTextureStatic);
+      }
     }
 
     _setupRenderCloudShadowMapVolumeProgram (gl, shaderProgram) {
@@ -1144,7 +1217,7 @@ var mainModule = (function () {
       gl.uniform1f(shaderProgram.unifs.uVisibleDist, this._visibleDist);
       gl.uniform1f(shaderProgram.unifs.uLocalShadowMapVisDistScale, this._localShadowsVisibleDistScale);
       gl.uniform1f(shaderProgram.unifs.uGlobalShadowMapVisDistScale, this._globalShadowsVisibleDistScale);
-      gl.uniform1f(shaderProgram.unifs.uLastLayer, CLOUD_SHADOW_MAP_VOLUME_SIZE[2] - 1.);
+      gl.uniform1f(shaderProgram.unifs.uLastLayer, CLOUD_SHADOW_MAP_VOLUME_SIZE[2] * 2.);
 
       gl.uniform1i(shaderProgram.unifs.uCloudTex, 0);
       gl.uniform1i(shaderProgram.unifs.uErosionTex, 1);
@@ -1155,7 +1228,7 @@ var mainModule = (function () {
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_3D, this._erosionVolumeTexture);
       gl.activeTexture(gl.TEXTURE2);
-      gl.bindTexture(gl.TEXTURE_2D, this._weatherTexture);
+      gl.bindTexture(gl.TEXTURE_3D, this._weatherTexture);
     }
 
     _setupRenderWeatherMapProgram (gl, shaderProgram) {
@@ -1166,6 +1239,8 @@ var mainModule = (function () {
     _setupRenderAtmosphereProgram (gl, shaderProgram) {
       gl.enableVertexAttribArray(shaderProgram.attrs.aPos);
       gl.enableVertexAttribArray(shaderProgram.attrs.aTexCoord);
+      // gl.uniform1f(shaderProgram.unifs.uUse2DWeather, !this._useFluidSimForWeather);
+      gl.uniform1f(shaderProgram.unifs.uUse2DWeather, true);
       gl.uniform1f(shaderProgram.unifs.uWeatherTexScale, this._weatherTexScale);
       gl.uniform1f(shaderProgram.unifs.uWindMagnitude, this._windMagnitude);
       gl.uniform1f(shaderProgram.unifs.uCloudTexScale, this._cloudTexScale);
@@ -1213,7 +1288,8 @@ var mainModule = (function () {
 
       gl.uniform1i(shaderProgram.unifs.uCloudTex, 0);
       gl.uniform1i(shaderProgram.unifs.uErosionTex, 1);
-      gl.uniform1i(shaderProgram.unifs.uWeatherTex, 2);
+      gl.uniform1i(shaderProgram.unifs.uWeatherTex3D, 2);
+      gl.uniform1i(shaderProgram.unifs.uWeatherTex2D, 14);
       gl.uniform1i(shaderProgram.unifs.uCrepuscularRaysBuffer, 3);
       gl.uniform1i(shaderProgram.unifs.uMilkyWay, 4);
       gl.uniform1i(shaderProgram.unifs.uMieScattCloudTex, 5);
@@ -1231,8 +1307,15 @@ var mainModule = (function () {
       gl.bindTexture(gl.TEXTURE_3D, this._cloudVolumeTexture);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_3D, this._erosionVolumeTexture);
-      gl.activeTexture(gl.TEXTURE2);
-      gl.bindTexture(gl.TEXTURE_2D, this._weatherTexture);
+      if (this._useFluidSimForWeather) {
+        gl.activeTexture(gl.TEXTURE14);
+        gl.bindTexture(gl.TEXTURE_2D, this._weatherTexture);
+      } else {
+        gl.activeTexture(gl.TEXTURE14);
+        gl.bindTexture(gl.TEXTURE_2D, this._weatherTextureStatic);
+      }
+      // gl.activeTexture(gl.TEXTURE2);
+      // gl.bindTexture(gl.TEXTURE_3D, this._weatherTexture);
       gl.activeTexture(gl.TEXTURE3);
       gl.bindTexture(gl.TEXTURE_2D, this._crepuscularRaysBufferSwap);
       // gl.activeTexture(gl.TEXTURE4);
@@ -1333,7 +1416,6 @@ var mainModule = (function () {
       this._localCloudShadowMapViewMatInv = mat4.create();
       this._localCloudShadowMapProjMat = mat4.create();
       this._localCloudShadowMapProjViewMatInv = mat4.create();
-      this._skyShadowMapProjMat = mat4.create();
 
       this._skyOpticalDepthFramebuffer = this._gl.createFramebuffer();
       this._skyViewLUTFramebuffer = this._gl.createFramebuffer();
@@ -1355,18 +1437,6 @@ var mainModule = (function () {
       );
 
       this._updateProjectionMatrix();
-
-
-      mat4.ortho(
-        this._skyShadowMapProjMat,
-        -this._R1,
-        this._R1,
-        -this._R1,
-        this._R1,
-        -this._R1,
-        this._R1
-      );
-
       this._setupDataArrays();
       this._updateShadowMapMatrices();
     }
@@ -1634,6 +1704,25 @@ var mainModule = (function () {
       this._gl.deleteTexture(this._weatherMap);
       this._weatherMap = this._gl.createTexture();
       this._gl.bindTexture(this._gl.TEXTURE_2D, this._weatherMap);
+      this._gl.texParameteri(this._gl.TEXTURE_2D, this._gl.TEXTURE_MAG_FILTER, this._gl.LINEAR);
+      this._gl.texParameteri(this._gl.TEXTURE_2D, this._gl.TEXTURE_MIN_FILTER, this._gl.LINEAR);
+      this._gl.texParameteri(this._gl.TEXTURE_2D, this._gl.TEXTURE_WRAP_S, this._gl.REPEAT);
+      this._gl.texParameteri(this._gl.TEXTURE_2D, this._gl.TEXTURE_WRAP_T, this._gl.REPEAT);
+      this._gl.texImage2D(
+        this._gl.TEXTURE_2D,
+        LOD,
+        this._gl.R16F,
+        WEATHER_MAP_SIZE[0],
+        WEATHER_MAP_SIZE[1],
+        border,
+        this._gl.RED,
+        this._gl.FLOAT,
+        null
+      );
+
+      this._gl.deleteTexture(this._weatherMapSwap);
+      this._weatherMapSwap = this._gl.createTexture();
+      this._gl.bindTexture(this._gl.TEXTURE_2D, this._weatherMapSwap);
       this._gl.texParameteri(this._gl.TEXTURE_2D, this._gl.TEXTURE_MAG_FILTER, this._gl.LINEAR);
       this._gl.texParameteri(this._gl.TEXTURE_2D, this._gl.TEXTURE_MIN_FILTER, this._gl.LINEAR);
       this._gl.texParameteri(this._gl.TEXTURE_2D, this._gl.TEXTURE_WRAP_S, this._gl.REPEAT);
@@ -1954,11 +2043,14 @@ var mainModule = (function () {
     _setupRenderingToBufferTexture (viewportWidth = DEFAULT_RES, viewportHeight = DEFAULT_RES, framebuffer = this._framebuffer) {
       this._gl.bindFramebuffer(this._gl.FRAMEBUFFER, framebuffer);
       this._gl.viewport(0, 0, viewportWidth, viewportHeight);
-      this._gl.bindBuffer(this._gl.ARRAY_BUFFER, this._bufferVerticesBuf);
-      this._gl.vertexAttribPointer(this._currentProgram.attrs.aPos, 3, this._gl.FLOAT, false, 0, 0);
-      this._gl.bindBuffer(this._gl.ELEMENT_ARRAY_BUFFER, this._bufferIndicesBuf);
-      this._gl.bindBuffer(this._gl.ARRAY_BUFFER, this._bufferTextureCoordBuf);
-      this._gl.vertexAttribPointer(this._currentProgram.attrs.aTexCoord, 2, this._gl.FLOAT, false, 0, 0);
+    }
+
+    _renderVolume (volumeToRender) {
+      this._setCurrentProgram(this._programs.renderVolume);
+      this._setupRenderingToScreen();
+      this._gl.activeTexture(this._gl.TEXTURE0);
+      this._gl.bindTexture(this._gl.TEXTURE_3D, volumeToRender);
+      this._gl.drawElements(this._gl.TRIANGLES, this._bufferIndices.length, this._gl.UNSIGNED_INT, 0);
     }
 
     _renderSkyVolume () {
@@ -1981,7 +2073,7 @@ var mainModule = (function () {
           0,
           i
         );
-        this._gl.uniform1f(this._programs.renderSkyVolume.unifs.uRenderLayer, i);
+        this._gl.uniform1f(this._programs.renderSkyVolume.unifs.uRenderLayer, 1 + 2 * i);
         this._gl.drawElements(this._drawMode, this._bufferIndices.length, this._gl.UNSIGNED_INT, 0);
       }
       this._resetFramebufferAttachments();
@@ -2006,27 +2098,11 @@ var mainModule = (function () {
       this._blurTex(this._skyViewLUT, this._skyViewLUTSwap, SKY_VIEW_LUT_SIZE[0], SKY_VIEW_LUT_SIZE[1], this._skyViewLUTFramebuffer);
     }
 
-    _renderSkyShadowMap () {
+    _renderSkyOpticalDepth () {
       if (!this._shouldRecalcSkyShadowMap) {
         return;
       }
-      mat4.ortho(
-        this._skyShadowMapProjMat,
-        -this._R1,
-        this._R1,
-        -this._R1,
-        this._R1,
-        -this._R1,
-        this._R1
-      );
-      // mat4.perspective(
-      //   this._shadowMapProjMat,
-      //   Math.atan(this._RCloud1 / vec3.len(this._lightPos)) * 2,
-      //   1.,
-      //   ZNEAR,
-      //   ZFAR
-      // );
-      this._setCurrentProgram(this._programs.renderSkyShadowMap);
+      this._setCurrentProgram(this._programs.renderSkyOpticalDepth);
       this._setupRenderingToBufferTexture(SKY_OPTICAL_DEPTH_LUT_SIZE[0], SKY_OPTICAL_DEPTH_LUT_SIZE[1], this._skyOpticalDepthFramebuffer);
       this._gl.drawBuffers([this._gl.COLOR_ATTACHMENT0]);
       this._gl.framebufferTexture2D(
@@ -2038,24 +2114,8 @@ var mainModule = (function () {
       );
       this._gl.clear(this._gl.COLOR_BUFFER_BIT | this._gl.DEPTH_BUFFER_BIT);
       this._gl.drawElements(this._drawMode, this._bufferIndices.length, this._gl.UNSIGNED_INT, 0);
-
-      this._gl.bindTexture(this._gl.TEXTURE_2D, this._skyOpticalDepthTex);
-      this._gl.generateMipmap(this._gl.TEXTURE_2D);
-
-
-      // this._setupRenderingToBufferTexture(SKY_VOLUME_W, SKY_VOLUME_W);
-      // let i;
-      // for (i = 0; i < SKY_VOLUME_D; i++) {
-      //   this._gl.framebufferTextureLayer(
-      //     this._gl.FRAMEBUFFER,
-      //     this._gl.COLOR_ATTACHMENT0,
-      //     this._skyScatteringVolume,
-      //     0,
-      //     i
-      //   );
-      //   this._gl.uniform1f(this._programs.renderSkyShadowMap.unifs.uRenderLayer, i);
-      //   this._gl.drawElements(this._drawMode, this._bufferIndices.length, this._gl.UNSIGNED_INT, 0);
-      // }
+      // this._gl.bindTexture(this._gl.TEXTURE_2D, this._skyOpticalDepthTex);
+      // this._gl.generateMipmap(this._gl.TEXTURE_2D);
       this._shouldRecalcSkyShadowMap = false;
     }
 
@@ -2103,7 +2163,7 @@ var mainModule = (function () {
           0,
           i
         );
-        this._gl.uniform1f(this._programs.renderCloudShadowMapVolume.unifs.uRenderLayer, i);
+        this._gl.uniform1f(this._programs.renderCloudShadowMapVolume.unifs.uRenderLayer, 1 + 2 * i);
         this._gl.drawElements(this._drawMode, this._bufferIndices.length, this._gl.UNSIGNED_INT, 0);
       }
     }
@@ -2180,7 +2240,7 @@ var mainModule = (function () {
       this._primaryCloudLayerTransmittanceBufferSwap = swap;
     }
 
-    _renderTex (tex, is3DTex = false) {
+    _renderTex (tex, is3DTex = false, scissorBox) {
       this._setCurrentProgram(this._programs.finalRender);
       this._setupRenderingToScreen();
       if (is3DTex) {
@@ -2192,15 +2252,31 @@ var mainModule = (function () {
         this._gl.bindTexture(this._gl.TEXTURE_2D, tex);
         this._gl.uniform1i(this._programs.finalRender.unifs.uRender3DTex, 0);
       }
-      this._gl.drawElements(this._drawMode, this._bufferIndices.length, this._gl.UNSIGNED_INT, 0);
+      if (scissorBox) {
+        this._setupRenderingToScreen(scissorBox.w, scissorBox.h);
+        this._gl.enable(this._gl.SCISSOR_TEST);
+        this._gl.scissor(scissorBox.x, scissorBox.y, scissorBox.w, scissorBox.h);
+        this._gl.drawElements(this._drawMode, this._bufferIndices.length, this._gl.UNSIGNED_INT, 0);
+        this._gl.disable(this._gl.SCISSOR_TEST);
+      } else {
+        this._gl.drawElements(this._drawMode, this._bufferIndices.length, this._gl.UNSIGNED_INT, 0);
+      }
     }
 
-    _render2DTex (tex) {
+    _render2DTex (tex, scissorBox) {
       this._setCurrentProgram(this._programs.render2DTex);
-      this._setupRenderingToScreen();
       this._gl.activeTexture(this._gl.TEXTURE0);
       this._gl.bindTexture(this._gl.TEXTURE_2D, tex);
-      this._gl.drawElements(this._drawMode, this._bufferIndices.length, this._gl.UNSIGNED_INT, 0);
+      if (scissorBox) {
+        this._setupRenderingToScreen(scissorBox.w, scissorBox.h);
+        this._gl.enable(this._gl.SCISSOR_TEST);
+        this._gl.scissor(scissorBox.x, scissorBox.y, scissorBox.w, scissorBox.h);
+        this._gl.drawElements(this._gl.TRIANGLES, this._bufferIndices.length, this._gl.UNSIGNED_INT, 0);
+        this._gl.disable(this._gl.SCISSOR_TEST);
+      } else {
+        this._setupRenderingToScreen();
+        this._gl.drawElements(this._gl.TRIANGLES, this._bufferIndices.length, this._gl.UNSIGNED_INT, 0);
+      }
     }
 
     _blurTex (inTex, outTex, texWidth, texHeight, fbo) {
@@ -2238,16 +2314,10 @@ var mainModule = (function () {
       this._gl.drawElements(this._drawMode, this._bufferIndices.length, this._gl.UNSIGNED_INT, 0);
     }
 
-    _setupRenderingToScreen () {
+    _setupRenderingToScreen (width = this._windowSize[0], height = this._windowSize[1]) {
       this._gl.clearColor(.0, .0, .0, 1.);
       this._gl.bindFramebuffer(this._gl.FRAMEBUFFER, null);
-      this._gl.viewport(0, 0, this._windowSize[0], this._windowSize[1]);
-
-      this._gl.bindBuffer(this._gl.ARRAY_BUFFER, this._bufferVerticesBuf);
-      this._gl.vertexAttribPointer(this._currentProgram.attrs.aPos, 3, this._gl.FLOAT, false, 0, 0);
-      this._gl.bindBuffer(this._gl.ELEMENT_ARRAY_BUFFER, this._bufferIndicesBuf);
-      this._gl.bindBuffer(this._gl.ARRAY_BUFFER, this._bufferTextureCoordBuf);
-      this._gl.vertexAttribPointer(this._currentProgram.attrs.aTexCoord, 2, this._gl.FLOAT, false, 0, 0);
+      this._gl.viewport(0, 0, width, height);
     }
 
     _checkIfMoving () {
@@ -2303,6 +2373,23 @@ var mainModule = (function () {
       console.log(resVecPrspDiv);
     }
 
+    _updateFluidSimParams () {
+      this._fluidSim.inkFadeFactor = this._fluidSimInkFadeFactor;
+      this._fluidSim.inkSplatSize = this._fluidSimInkSplatSize;
+      this._fluidSim.forceMagnitude = this._fluidSimForceMag;
+      this._fluidSim.vorticityMul = this._fluidSimVorticityMul;
+      this._fluidSim.timeScale = this._fluidSimTimeScale;
+      this._fluidSim.diffusionIterations = this._fluidSimDiffusionIterations;
+      this._fluidSim.pressureIterations = this._fluidSimPressureIterations;
+      this._fluidSim.forceSplatSize = this._fluidSimForceSplatSize;
+    }
+
+    updateMatrices () {
+      mat4.copy(this._prevViewMat, this._viewMat);
+      mat4.invert(this._prevViewMatInv, this._prevViewMat);
+      mat4.mul(this._projPrevViewMatInv, this._projMat, this._prevViewMatInv);
+    }
+
     update () {
       let t = performance.now();
       if (this._animateSun) {
@@ -2312,29 +2399,49 @@ var mainModule = (function () {
         // this._shouldRecalcSkyShadowMap = true;
       }
       this._timeModded = performance.now() % 100000.;
-      mat4.copy(this._prevViewMat, this._viewMat);
-      mat4.invert(this._prevViewMatInv, this._prevViewMat);
-      mat4.mul(this._projPrevViewMatInv, this._projMat, this._prevViewMatInv);
-      this._processMouse();
-      this._processKeys();
+      // Old way of applying mouse:
+      // mat4.copy(this._prevViewMat, this._viewMat);
+      // mat4.invert(this._prevViewMatInv, this._prevViewMat);
+      // mat4.mul(this._projPrevViewMatInv, this._projMat, this._prevViewMatInv);
+      // this._applyMouse();
+      this._processKeys(this._dt);
       this._checkCameraPlanetCollision();
       this._checkIfMoving();
       this._updateVisibleDist();
-      if (this._isMoving || this._windMagnitude !== 0.) {
+      if (this._isMoving || this._windMagnitude !== 0. || this._useFluidSimForWeather) {
         this._shouldRecalcCloudShadowMap = true;
+      }
+      if (this._useFluidSimForWeather) {
+        this._updateFluidSimParams();
+        this._fluidSim.update(this._dt);
       }
       DBG_INFO.updateTime = performance.now() - t;
     }
 
     render () {
       // this._renderWeatherMap();
+      if (this._useFluidSimForWeather) {
+        this._fluidSim.render();
+      }
       this._renderCloudShadowMaps();
       // this._renderCloudShadowMapVolume();
-      this._renderSkyShadowMap();
+      this._renderSkyOpticalDepth();
       this._renderSkyViewLUT();
       this._renderSkyVolume();
       this._renderAtmosphere();
       this._render2DTex(this._backBuffer);
+      // this._renderVolume(this._fluidSim._simTextures.currentVelocityTexture);
+      // this._renderVolume(this._weatherTexture);
+      if (this._useFluidSimForWeather)
+      {
+        this._render2DTex(this._weatherTexture, {x: 0, y: 0, w: WEATHER_DRAWING_BOARD_SIZE[0], h: WEATHER_DRAWING_BOARD_SIZE[1]});
+      }
+      else
+      {
+        this._render2DTex(this._weatherTextureStatic, {x: 0, y: 0, w: WEATHER_DRAWING_BOARD_SIZE[0], h: WEATHER_DRAWING_BOARD_SIZE[1]});
+      }
+      // this._renderTex(this._weatherTexture, true, {x: 0, y: 0, w: WEATHER_DRAWING_BOARD_SIZE[0], h: WEATHER_DRAWING_BOARD_SIZE[1]});
+      // this._renderTex(this._fluidSim._simTextures.currentVelocityTexture, true, {x: 0, y: 0, w: WEATHER_DRAWING_BOARD_SIZE[0], h: WEATHER_DRAWING_BOARD_SIZE[1]});
     }
 
     _hexToRGB (hex = '#000000', normalize = false) {
@@ -2421,6 +2528,15 @@ var mainModule = (function () {
         }
         this[i] = cfg[i];
       }
+    }
+
+    _handleFluidSimWeatherCheck (isChecked) {
+      // if (isChecked) {
+      //   this._weatherTexture = this._fluidSim.getInkTex();
+      // } else {
+      //   this._weatherTexture = this._weatherTextureStatic;
+      // }
+      this._useFluidSimForWeather = isChecked;
     }
 
     // defining all ui related stuff here in order to easily move/remove in next projects
@@ -2722,9 +2838,107 @@ var mainModule = (function () {
             <span class="caption">cloud noise scale:</span>
             <input type="number" data-field="_cloudTexScale" data-recalc-shadow-map="true" data-val-min="0" step=".01" class="narrow-64" value="${this._cloudTexScale}"/>
           </div>
+
+          <div class="section">Weather:</div>
+          <div class="ui-item">
+            <span class="caption">fluid sim weather:</span>
+            <input type="checkbox"
+              data-field="_useFluidSimForWeather"
+              data-custom-handler="_handleFluidSimWeatherCheck"
+              ${this._useFluidSimForWeather ? 'checked' : ''}
+            />
+          </div>
+          <div class="ui-item">
+            <span class="caption">ink splat size:</span>
+            <input type="number"
+              data-field="_fluidSimInkSplatSize"
+              data-val-min="0"
+              step=".0001"
+              class="narrow-64"
+              value="${this._fluidSimInkSplatSize}"
+            />
+          </div>
+          <div class="ui-item">
+            <span class="caption">force splat size:</span>
+            <input type="number"
+              data-field="_fluidSimForceSplatSize"
+              data-val-min="0"
+              step=".0001"
+              class="narrow-64"
+              value="${this._fluidSimForceSplatSize}"
+            />
+          </div>
+          <div class="ui-item">
+            <span class="caption">force mul:</span>
+            <input type="number"
+              data-field="_fluidSimForceMag"
+              data-val-min="0"
+              step=".1"
+              class="narrow-64"
+              value="${this._fluidSimForceMag}"
+            />
+          </div>
+          <div class="ui-item">
+            <span class="caption">ink fade factor:</span>
+            <input type="number"
+              data-field="_fluidSimInkFadeFactor"
+              data-val-min="0"
+              data-val-max="1"
+              step=".001"
+              class="narrow-64"
+              value="${this._fluidSimInkFadeFactor}"
+            />
+          </div>
+          <div class="ui-item">
+            <span class="caption">vorticity mul:</span>
+            <input type="number"
+              data-field="_fluidSimVorticityMul"
+              data-val-min=".0001"
+              step=".01"
+              class="narrow-64"
+              value="${this._fluidSimVorticityMul}"
+            />
+          </div>
+          <div class="ui-item">
+            <span class="caption">diffusion iterations:</span>
+            <input type="number"
+              data-field="_fluidSimDiffusionIterations"
+              data-val-min="0"
+              step="1"
+              class="narrow-64"
+              value="${this._fluidSimDiffusionIterations}"
+            />
+          </div>
+          <div class="ui-item">
+            <span class="caption">pressure iterations:</span>
+            <input type="number"
+              data-field="_fluidSimPressureIterations"
+              data-val-min="0"
+              step="1"
+              class="narrow-64"
+              value="${this._fluidSimPressureIterations}"
+            />
+          </div>
+          <div class="ui-item">
+            <span class="caption">time scale:</span>
+            <input type="number"
+              data-field="_fluidSimTimeScale"
+              data-val-min="0.01"
+              step=".01"
+              class="narrow-64"
+              value="${this._fluidSimTimeScale}"
+            />
+          </div>
           <div class="ui-item">
             <span class="caption">weather tex scale:</span>
-            <input type="number" data-field="_weatherTexScale" data-recalc-shadow-map="true" data-val-min="0" step=".01" class="narrow-64" value="${this._weatherTexScale}"/>
+            <input type="number"
+              data-field="_weatherTexScale"
+              data-recalc-shadow-map="true"
+              data-val-min="0"
+              step=".01"
+              class="narrow-64"
+              value="${this._weatherTexScale}"
+            />
           </div>
           <div class="ui-item">
             <span class="caption">wind magnitude:</span>
@@ -2739,6 +2953,10 @@ var mainModule = (function () {
           </div>
 
           <div class="section">Misc:</div>
+          <div class="ui-item">
+            <span class="caption">gamma 1/:</span>
+            <input type="number" data-field="_gamma" data-val-min="0" data-val-max="10" step=".05" class="narrow-64" value="${this._gamma}"/>
+          </div>
           <div class="ui-item">
             <span class="caption">temporal coef:</span>
             <input type="number" data-field="_temporalAlpha" data-val-min="0" data-val-max="1" step=".05" class="narrow-64" value="${this._temporalAlpha}"/>
@@ -2914,6 +3132,9 @@ var mainModule = (function () {
         this[fieldName] = e.target.checked;
         this._shouldRecalcCloudShadowMap = recalcShadowMap;
         this._shouldRecalcSkyShadowMap = recalcSkyShadowMap;
+        if (e.target.dataset.customHandler) {
+          this[e.target.dataset.customHandler](e.target.checked);
+        }
         if (e.target.checked) {
           document.querySelector('.control-panel').classList.add(classSwitch);
         } else {
@@ -3015,6 +3236,11 @@ var mainModule = (function () {
       this._renderDbgInfo();
       this.update();
       this.render();
+
+      // Update matrices has to happen after render step in order to ensure there is no ghosting.
+      // This change is needed if the viewMatrix is being changed by mousemove event handler directly.
+      // It seems in this case overall visual experience is more smooth.
+      this.updateMatrices();
     }
   }
 

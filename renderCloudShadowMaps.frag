@@ -32,7 +32,9 @@ uniform mat4 uGlobalShadowMapViewMat;
 uniform mat4 uObserverViewMat;
 uniform sampler3D uCloudTex;
 uniform sampler3D uErosionTex;
-uniform sampler2D uWeatherTex;
+uniform bool uUse2DWeather;
+uniform sampler2D uWeatherTex2D;
+uniform sampler3D uWeatherTex3D;
 
 in vec2 vTexCoord;
 layout (location=0) out vec4 globalShadowMapOut;
@@ -118,8 +120,14 @@ float getHeightSignal (vec3 samplePos) {
 ParticipatingMedia getParticipatingMedia(const vec3 samplePos, const bool sampleCloudNoise) {
   vec3 sigmaScattering;
   vec3 sigmaExtinction;
-  float weatherData = textureLod(uWeatherTex, (uT * uWindMagnitude * .005 + samplePos.xz) * uWeatherTexScale, 0.).x;
-  // float weatherData = generateWeatherMap((samplePos.xz + uT * .00025) * uWeatherTexScale);
+  float z = (length(samplePos) - uRCloud0) / (uRCloud1 - uRCloud0);
+  float weatherData;
+  if (uUse2DWeather) {
+    weatherData = textureLod(uWeatherTex2D, (uT * uWindMagnitude * .005 + samplePos.xz) * uWeatherTexScale, 0.).x;
+  } else {
+    weatherData = textureLod(uWeatherTex3D, (uT * uWindMagnitude * .005 + vec3(samplePos.xz * uWeatherTexScale, z)), 0.).x;
+  }
+  // float weatherData = textureLod(uWeatherTex, (uT * uWindMagnitude * .005 + vec3(vec2(samplePos.x, z) * uWeatherTexScale, samplePos.z)), 0.).x;
   float density;
   float cloudSample;
   float coverageSignal = weatherData * getHeightSignal(samplePos);

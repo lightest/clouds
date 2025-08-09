@@ -54,7 +54,9 @@ uniform mat4 uLocalShadowMapProjViewMatInv; // uLocalShadowMapProjMat * uLocalSh
 uniform mat4 uGlobalShadowMapProjViewMatInv; // uGlobalShadowMapProjMat * uGlobalShadowMapViewMatInv
 uniform sampler3D uCloudTex;
 uniform sampler3D uErosionTex;
-uniform sampler2D uWeatherTex;
+uniform bool uUse2DWeather;
+uniform sampler2D uWeatherTex2D;
+uniform sampler3D uWeatherTex3D;
 uniform sampler2D uCrepuscularRaysBuffer;
 uniform sampler2D uMilkyWay;
 uniform sampler2D uMieScattCloudTex;
@@ -111,13 +113,30 @@ struct CloudMarchData {
   vec3 farSample;
 };
 
+const float ALPHA = 0.14;
+const float INV_ALPHA = 1.0 / ALPHA;
+const float K = 2.0 / (PI * ALPHA);
+
 //note: uniformly distributed, normalized rand, [0;1[
 float nrand(vec2 n) {
   return fract(sin(dot(n.xy, vec2(12.9898, 78.233)))* 43758.5453);
 }
 
+float inv_error_function(float x) {
+  float y = log(1.0 - x*x);
+  float z = K + 0.5 * y;
+  return sqrt(sqrt(z*z - y * INV_ALPHA) - z) * sign(x);
+}
+
+float gaussian_rand(vec2 n) {
+  float t = fract(uTModded);
+  float x = nrand(n + 0.07*t);
+  return clamp(inv_error_function(x*2.0-1.0)*0.15 + 0.5, 0., 1.);
+}
+
 float n1rand(vec2 n) {
   return nrand(0.07 * fract(uTModded) + n);
+  // return gaussian_rand(n);
 }
 
 float isotropicPhaseFunction () {
@@ -338,7 +357,14 @@ float getHeightSignal (vec3 samplePos) {
 ParticipatingMedia getParticipatingMedia(const vec3 samplePos, const bool sampleCloudNoise) {
   vec3 sigmaScattering;
   vec3 sigmaExtinction;
-  float weatherData = textureLod(uWeatherTex, (uT * uWindMagnitude * .005 + samplePos.xz) * uWeatherTexScale, 0.).x;
+  float z = (length(samplePos) - uRCloud0) / (uRCloud1 - uRCloud0);
+  float weatherData;
+  if (uUse2DWeather) {
+    weatherData = textureLod(uWeatherTex2D, (uT * uWindMagnitude * .005 + samplePos.xz) * uWeatherTexScale, 0.).x;
+  } else {
+    weatherData = textureLod(uWeatherTex3D, (uT * uWindMagnitude * .005 + vec3(samplePos.xz * uWeatherTexScale, z)), 0.).x;
+  }
+  // float weatherData = textureLod(uWeatherTex, (uT * uWindMagnitude * .005 + vec3(vec2(samplePos.x, z) * uWeatherTexScale, samplePos.z)), 0.).x;
   float density;
   float cloudSample;
   float coverageSignal = weatherData * getHeightSignal(samplePos);

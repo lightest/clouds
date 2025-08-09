@@ -6,6 +6,15 @@ body {
   margin: 0;
   overflow: hidden;
   font-family: monospace;
+  font-size: 13px;
+}
+
+.weather-board {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 300px;
+  height: 300px;
 }
 
 .loading {
@@ -42,10 +51,12 @@ body {
   color: white;
   padding: 8px;
   background: #222;
+  min-width: 350px;
 }
 
 .control-panel .ui-item {
   margin: 0 0 8px 0;
+  height: 24px;
 }
 
 .control-panel .section {
@@ -56,6 +67,7 @@ body {
 
 .control-panel .ui-item input {
   float: right;
+  height: 21px;
 }
 
 .control-panel .ui-item .caption {

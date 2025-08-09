@@ -69,7 +69,8 @@ var ShaderProgram = (function () {
       if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
         info = gl.getProgramInfoLog(program);
         console.log(info);
-        program = null;
+        console.error('Shader linking error. Shader files:', params.vertPath, params.fragPath);
+        return null;
       }
       this.glProgram = program;
       this.attrs = this._getAttribLocations(gl, program, params.attrs);

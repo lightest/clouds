@@ -4,6 +4,7 @@ precision highp float;
 uniform float uT;
 uniform float uTModded;
 uniform float uDT;
+uniform float uGamma;
 uniform vec2 uWindowSize;
 uniform vec2 uMouse;
 uniform sampler2D uTex;
@@ -29,5 +30,6 @@ void main () {
   // vec4 c = v * 1./texture(uTex, vec2(vTexCoord.x * .25, vTexCoord.y)) * 1.;
   // vec4 c = v * exp(vTexCoord.x * 7.5) * 100000000.;
   // c.xyz = pow(c.xyz, vec3(1.0/2.2));
-  color = texture(uTex, vTexCoord);
+  vec3 c = pow(texture(uTex, vTexCoord).xyz, vec3(1. / uGamma));
+  color = vec4(c, 1.);
 }
